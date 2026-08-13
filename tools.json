@@ -1,0 +1,70 @@
+[
+  {
+    "name": "move",
+    "description": "Drive the robot in a direction.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "direction": {
+          "type": "string",
+          "enum": [
+            "forward",
+            "backward",
+            "left",
+            "right"
+          ]
+        },
+        "distance_m": {
+          "type": "number",
+          "description": "Distance in meters."
+        }
+      },
+      "required": [
+        "direction",
+        "distance_m"
+      ]
+    }
+  },
+  {
+    "name": "rotate",
+    "description": "Rotate the robot in place.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "direction": {
+          "type": "string",
+          "enum": [
+            "left",
+            "right"
+          ]
+        },
+        "degrees": {
+          "type": "number"
+        }
+      },
+      "required": [
+        "direction",
+        "degrees"
+      ]
+    }
+  },
+  {
+    "name": "gripper",
+    "description": "Open or close the gripper.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "action": {
+          "type": "string",
+          "enum": [
+            "open",
+            "close"
+          ]
+        }
+      },
+      "required": [
+        "action"
+      ]
+    }
+  }
+]

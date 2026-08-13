@@ -1,0 +1,251 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+	<meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
+    <title>Needle 2 Test</title>
+</head>
+<body>
+<h1>Needle 2 WASM</h1>
+
+<div id="robot-world">
+    <div id="robot">
+        <div id="robot-gripper"></div>
+    </div>
+</div>
+
+<p style="display:inline">Status: </p><pre id="status" style="display:inline">Loading...</pre>
+<br>
+<br>
+<input id="query" type="text" placeholder="Write your query"/>
+<input id="sendButton" type="button" value="Send">
+<pre id="output"></pre>
+</body>
+</html>
+<script src="./needle.js"></script>
+<script>
+let needle = 0;
+const NEEDLE_CACT_PATH = "needle2.cact"
+const TOOLS_JSON_PATH = "tools.json"
+/*
+ * ---------------------------------------------------------
+ * Needle wrapper
+ * ---------------------------------------------------------
+ */
+class Needle {
+	constructor(runtime) {
+		this.outputPointer = 0;
+		this.runtime = runtime;
+	}
+
+	allocateCString(runtime, value) {
+		const bytes = new TextEncoder().encode(value);
+		const pointer = runtime._malloc(bytes.length + 1);
+		runtime.HEAPU8.set(bytes, pointer);
+		runtime.HEAPU8[pointer + bytes.length] = 0;
+		return pointer;
+	}
+
+	// fetch the act model binary
+	async fetchAct(path) {
+		const response = await fetch(path);
+
+		if (!response.ok) {
+			throw new Error(
+					`Failed to load model: ${response.status} ${response.statusText}`
+					);
+		}
+
+		const buffer = await response.arrayBuffer();
+		const model = new Uint8Array(buffer);
+		return model;
+	}
+
+	// fetch tools json
+	async fetchTools(path) {
+		console.info("[+] Fetching tools from", path);
+		const response = await fetch(path);
+		if (!response.ok) {
+			throw new Error(
+					`Failed to load tools.js: ${response.status}`
+					);
+		}
+		return await response.text();
+	}
+
+	// load the act model
+	async load(modelPath) {
+		console.info("[+] Fetching Model from", modelPath)
+			const model = await this.fetchAct(modelPath);
+		const modelPtr = this.runtime._malloc(model.length);
+		this.runtime.HEAPU8.set(model, modelPtr);
+
+		if(this.runtime._needle_load(modelPtr, BigInt(model.length)) !== 0){
+			throw new Error("[x] Failed to load the model");
+		}
+		console.info("[+] OK. Model size:", model.length)
+			console.info(this.runtime)
+			return this.runtime 
+	}
+
+	// init the system prompt and tools
+	async init(toolsPath, systemPrompt="") {
+		console.info("[+] Initializing");
+		const tools = await this.fetchTools(toolsPath);
+		const promptPointer = this.allocateCString(this.runtime, "");
+		const toolsPointer = this.allocateCString(this.runtime, tools);
+		this.outputPointer = this.runtime._malloc(16384);
+		try {
+			if(this.runtime._needle_init(promptPointer, toolsPointer) < 0){
+				throw new Error("[x] Tool initialization failed");
+			}
+		} finally {
+			this.runtime._free(promptPointer);
+			this.runtime._free(toolsPointer);
+		}
+		console.info("[+] Initiated");
+	}
+
+	// run a completion
+	complete(query, maxNewTokens = 128, capacity = 16384) {
+		this.reset();
+		const queryPointer = this.allocateCString(this.runtime, query);
+		try{
+			this.runtime._needle_complete(queryPointer, maxNewTokens, this.outputPointer, capacity);
+			const result = JSON.parse(this.runtime.UTF8ToString(this.outputPointer));
+			console.info("[+] Completion result:", result);
+			return result;
+		} finally {
+			this.runtime._free(this.queryPointer);
+		}
+	}
+
+	// reset current state
+	reset() {
+		this.runtime._needle_reset();
+	}
+
+	// load cact and tools
+	async start(cactPath, toolsPath) {
+		await this.load(cactPath);
+		await this.init(toolsPath);
+	}
+}
+
+// load and instance needle
+async function main(){
+	try{
+		const runtime = await createNeedle();
+		needle = await new Needle(runtime);
+		await needle.start(NEEDLE_CACT_PATH, TOOLS_JSON_PATH);
+		needleStatus.textContent = "Ready";
+	}catch(error){
+		console.error(error);
+		console.log(error.stack);
+		needleStatus.textContent = "Failed";
+	}
+}
+
+main();
+
+// GUI Robot Demo
+let output = document.getElementById("output");
+let needleStatus = document.getElementById("status");
+let queryInput = document.getElementById("query");
+
+function run(query){
+	needleStatus.textContent = "Running";
+	const start = performance.now()
+		const result = needle.complete(query);
+	const elapsed = performance.now() - start;
+	"Suggested Tool:", output.textContent = JSON.stringify(result.function_calls) + "\n" +
+		"Confidence:" + JSON.stringify(result.confidence) + "\n" +
+		"Reasoning steps:" + JSON.stringify(result.reasoning) + "\n" +
+		"Time:" + elapsed.toFixed(2) + "ms";
+	needleStatus.textContent = "Ready";
+	executeToolCalls(result.function_calls);
+	return result;
+}
+document.getElementById("sendButton").addEventListener("click", ()=>{run(queryInput.value);queryInput.value=""});
+queryInput.addEventListener("keydown", (e)=>{if(e.code === "Enter"){run(queryInput.value);queryInput.value=""}});
+queryInput.focus();
+
+// robot
+const robot={x:200,y:150,rotation:0,gripperOpen:true};
+const el=document.getElementById("robot");
+const grip=document.getElementById("robot-gripper");
+let target={...robot};
+let animating=false;
+function render(){
+	el.style.left=`${robot.x-15}px`;
+	el.style.top=`${robot.y-15}px`;
+	el.style.transform=`rotate(${robot.rotation}deg)`;
+	grip.style.background=robot.gripperOpen?"#2ecc71":"#e74c3c";
+}
+
+function animate(){
+	if(animating)return;
+	animating=true;
+	function frame(){
+		const dx=target.x-robot.x;
+		const dy=target.y-robot.y;
+		let dr=target.rotation-robot.rotation;
+		if(dr>180)dr-=360;if(dr<-180)dr+=360;
+		robot.x+=dx*.12;robot.y+=dy*.12;robot.rotation+=dr*.12;
+		render();
+		if(Math.abs(dx)>.1||Math.abs(dy)>.1||Math.abs(dr)>.1){requestAnimationFrame(frame);
+		}else{Object.assign(robot,target);render();animating=false;}
+	}
+	requestAnimationFrame(frame);
+}
+
+function move(direction,distance_m){
+	const d=distance_m*50;
+	const r=target.rotation*Math.PI/180;
+	const fx=Math.sin(r),fy=-Math.cos(r);
+	const rx=Math.cos(r),ry=Math.sin(r);
+	if(direction==="forward"){target.x+=fx*d;target.y+=fy*d;}
+	if(direction==="backward"){target.x-=fx*d;target.y-=fy*d;}
+	if(direction==="left"){target.x-=rx*d;target.y-=ry*d;}
+	if(direction==="right"){target.x+=rx*d;target.y+=ry*d;}
+	target.x=Math.max(15,Math.min(385,target.x));
+	target.y=Math.max(15,Math.min(285,target.y));
+	animate();
+}
+function rotate(direction,degrees){target.rotation+=(direction==="right"?degrees:-degrees);animate();}
+function gripper(action){target.gripperOpen=action==="open";animate();}
+
+function executeToolCalls(functionCalls) {
+	for (const call of functionCalls) {
+		switch (call.name) {
+			case "move":
+				move(
+						call.arguments.direction,
+						call.arguments.distance_m
+					);
+				break;
+
+			case "rotate":
+				rotate(
+						call.arguments.direction,
+						call.arguments.degrees
+					  );
+				break;
+
+			case "gripper":
+				gripper(call.arguments.action);
+				break;
+
+			default:
+				console.warn("Unknown tool:", call.name);
+		}
+	}
+}
+render();
+</script>
+<style>
+#robot-world{position:relative;width:400px;height:300px;border:1px solid #333;overflow:hidden}
+#robot{position:absolute;width:30px;height:30px;background:#3498db;transform-origin:center;clip-path:polygon(50% 0,100% 100%,50% 75%,0 100%)}
+#robot-gripper{position:absolute;width:16px;height:5px;bottom:-5px;left:7px;background:#2ecc71}
+</style>
