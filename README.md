@@ -1,6 +1,6 @@
 # Needle 2 WASM demo implementation
 
-![GUI]([https://example.com/image.png](https://i.ibb.co/WvgPMpNm/Captura-de-pantalla-2026-08-13-164257.png))
+![GUI](https://i.ibb.co/yFWYZBmH/Captura-de-pantalla-2026-08-13-164257.png)
 
 ## What is this
 This is a simple html demo file to execute tool calling using the agentic model Needle 2.
